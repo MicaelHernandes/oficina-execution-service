@@ -156,6 +156,9 @@ resource "random_password" "api_token" {
 
 resource "aws_secretsmanager_secret" "api_token" {
   name = "/oficina/execution/api-token"
+  # Sem janela de recuperação: o ambiente é destruído e recriado entre as
+  # apresentações, e um secret "agendado para exclusão" bloqueia recriar o nome.
+  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "api_token" {
