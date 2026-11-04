@@ -6,7 +6,8 @@
 #   oficina-db-infra; o CREATE ROLE/DATABASE roda no Job de bootstrap).
 # - Fila SQS `oficina-execution-service` + DLQ, assinando o tópico do OS
 #   Service só com os comandos `execution.*` (filter policy).
-# - Tópico SNS `oficina-execution-events`: eventos para o orquestrador.
+# - Tópico SNS `oficina-execution-events`: eventos para o orquestrador, com a
+#   assinatura na fila do OS Service.
 # - Role IRSA do ServiceAccount `oficina-execution`.
 # - Token Bearer das rotas do mecânico.
 # ---------------------------------------------------------------------------
@@ -80,6 +81,16 @@ resource "aws_sns_topic_subscription" "os_commands" {
   })
 
   depends_on = [aws_sqs_queue_policy.inbox]
+}
+
+# Eventos do Execution para o orquestrador: este repositório cria a assinatura do
+# próprio tópico na fila do OS Service (a política da fila já aceita os
+# tópicos oficina-*-events), então não há ordem de deploy entre os repos.
+resource "aws_sns_topic_subscription" "os_events" {
+  topic_arn            = aws_sns_topic.events.arn
+  protocol             = "sqs"
+  endpoint             = data.aws_ssm_parameter.os_queue_arn.value
+  raw_message_delivery = true
 }
 
 # --- IRSA -----------------------------------------------------------------

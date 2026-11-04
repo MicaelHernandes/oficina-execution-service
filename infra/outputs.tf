@@ -1,7 +1,6 @@
 # ---------------------------------------------------------------------------
 # Outputs + SSM (/oficina/messaging/execution-service/...): a pipeline lê para
-# configurar os pods, e a infra do OS Service lê o ARN do tópico para assinar
-# os eventos (consumed_topics).
+# configurar os pods.
 # ---------------------------------------------------------------------------
 
 output "topic_arn" {

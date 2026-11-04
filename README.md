@@ -126,7 +126,7 @@ O relatório `coverage.xml` de cada execução fica como artefato do workflow **
 2. **oficina-db-infra** (credencial `/oficina/rds/execution`).
 3. **oficina-api** com a `infra/` aplicada (tópico `oficina-os-events`).
 4. **Este repositório.**
-5. De volta ao **oficina-api**: incluir `oficina-execution-events` em `consumed_topics` para o OS Service receber os eventos.
+5. Os eventos chegam ao OS Service pela assinatura que a `infra/` deste repositório cria na fila do orquestrador (`/oficina/messaging/os-service/queue_arn`). Com os três serviços no ar, liga-se a saga no oficina-api (`SAGA_ENABLED=true`).
 
 ## Custo
 
