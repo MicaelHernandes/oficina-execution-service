@@ -1,0 +1,51 @@
+# Workers do Execution num único pod (economiza recursos do nó):
+# - consumer: comandos da saga vindos da fila SQS (`execution:consume`)
+# - relay: publica o outbox (PostgreSQL) no SNS (`execution:relay`)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oficina-execution-worker
+  labels:
+    app: oficina-execution-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oficina-execution-worker
+  template:
+    metadata:
+      labels:
+        app: oficina-execution-worker
+    spec:
+      serviceAccountName: oficina-execution
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: consumer
+          image: oficina-execution:latest
+          command: ["php", "artisan", "execution:consume", "--max-time=3600"]
+          envFrom: &env
+            - configMapRef:
+                name: oficina-execution-config
+            - secretRef:
+                name: oficina-execution-secrets
+            - configMapRef:
+                name: oficina-execution-runtime
+                optional: true
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "96Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+        - name: relay
+          image: oficina-execution:latest
+          command: ["php", "artisan", "execution:relay", "--max-time=3600"]
+          envFrom: *env
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "96Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"

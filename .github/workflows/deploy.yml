@@ -1,0 +1,157 @@
+name: Deploy (produção)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: oficina
+  NAMESPACE: oficina
+
+jobs:
+  deploy:
+    name: infra + build + push ECR + deploy EKS
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configura credenciais AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_wrapper: false
+
+      # Tópico SNS, fila SQS (assinando os comandos execution.* do OS
+      # Service), role IRSA e token das rotas do mecânico.
+      - name: Terraform apply (infra/)
+        working-directory: infra
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+      - name: Login no ECR
+        id: ecr
+        run: |
+          ECR_URL=$(aws ssm get-parameter --name /oficina/ecr/oficina-execution-service/repository_url --query Parameter.Value --output text)
+          echo "url=$ECR_URL" >> "$GITHUB_OUTPUT"
+          REGISTRY=$(echo "$ECR_URL" | cut -d/ -f1)
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Build e push da imagem
+        env:
+          ECR_URL: ${{ steps.ecr.outputs.url }}
+        run: |
+          docker build -t "$ECR_URL:${GITHUB_SHA}" -t "$ECR_URL:latest" .
+          docker push "$ECR_URL:${GITHUB_SHA}"
+          docker push "$ECR_URL:latest"
+
+      - name: Instala kubectl e kustomize
+        run: |
+          curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Configura kubeconfig
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Garante o namespace
+        run: kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Cria/atualiza o Secret do Execution (Secrets Manager)
+        env:
+          APP_KEY: ${{ secrets.LARAVEL_APP_KEY }}
+        run: |
+          DB_JSON=$(aws secretsmanager get-secret-value --secret-id /oficina/rds/execution --query SecretString --output text)
+          API_TOKEN=$(aws secretsmanager get-secret-value --secret-id /oficina/execution/api-token --query SecretString --output text)
+
+          kubectl create secret generic oficina-execution-secrets -n "$NAMESPACE" \
+            --from-literal=APP_KEY="$APP_KEY" \
+            --from-literal=EXECUTION_API_TOKEN="$API_TOKEN" \
+            --from-literal=DB_HOST="$(echo "$DB_JSON" | jq -r .host)" \
+            --from-literal=DB_PORT="$(echo "$DB_JSON" | jq -r .port)" \
+            --from-literal=DB_DATABASE="$(echo "$DB_JSON" | jq -r .dbname)" \
+            --from-literal=DB_USERNAME="$(echo "$DB_JSON" | jq -r .username)" \
+            --from-literal=DB_PASSWORD="$(echo "$DB_JSON" | jq -r .password)" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # Usuário e database próprios no RDS compartilhado. As credenciais
+      # master só existem no Secret temporário, apagado ao fim do Job.
+      - name: Bootstrap do banco (Job)
+        run: |
+          MASTER_JSON=$(aws secretsmanager get-secret-value --secret-id /oficina/rds/master --query SecretString --output text)
+          DB_JSON=$(aws secretsmanager get-secret-value --secret-id /oficina/rds/execution --query SecretString --output text)
+
+          kubectl create secret generic oficina-execution-db-bootstrap -n "$NAMESPACE" \
+            --from-literal=DB_HOST="$(echo "$MASTER_JSON" | jq -r .host)" \
+            --from-literal=DB_PORT="$(echo "$MASTER_JSON" | jq -r .port)" \
+            --from-literal=MASTER_USER="$(echo "$MASTER_JSON" | jq -r .username)" \
+            --from-literal=MASTER_PASSWORD="$(echo "$MASTER_JSON" | jq -r .password)" \
+            --from-literal=OS_DB="$(echo "$MASTER_JSON" | jq -r .dbname)" \
+            --from-literal=SVC_USER="$(echo "$DB_JSON" | jq -r .username)" \
+            --from-literal=SVC_PASSWORD="$(echo "$DB_JSON" | jq -r .password)" \
+            --from-literal=SVC_DB="$(echo "$DB_JSON" | jq -r .dbname)" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl delete job oficina-execution-db-bootstrap -n "$NAMESPACE" --ignore-not-found
+          kubectl apply -n "$NAMESPACE" -f k8s/jobs/db-bootstrap-job.yaml
+          STATUS=0
+          kubectl wait --for=condition=complete job/oficina-execution-db-bootstrap -n "$NAMESPACE" --timeout=180s || STATUS=$?
+          kubectl logs job/oficina-execution-db-bootstrap -n "$NAMESPACE" || true
+          kubectl delete secret oficina-execution-db-bootstrap -n "$NAMESPACE" --ignore-not-found
+          exit $STATUS
+
+      - name: Cria/atualiza o ConfigMap de runtime (SSM)
+        run: |
+          TOPIC_ARN=$(aws ssm get-parameter --name /oficina/messaging/execution-service/topic_arn --query Parameter.Value --output text)
+          QUEUE_URL=$(aws ssm get-parameter --name /oficina/messaging/execution-service/queue_url --query Parameter.Value --output text)
+
+          kubectl create configmap oficina-execution-runtime -n "$NAMESPACE" \
+            --from-literal=MESSAGING_PUBLISHER=sns \
+            --from-literal=MESSAGING_CONSUMER=sqs \
+            --from-literal=MESSAGING_TOPIC_ARN="$TOPIC_ARN" \
+            --from-literal=MESSAGING_QUEUE_URL="$QUEUE_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Aponta a imagem e a role IRSA no overlay e aplica
+        env:
+          ECR_URL: ${{ steps.ecr.outputs.url }}
+        run: |
+          IRSA_ROLE_ARN=$(aws ssm get-parameter --name /oficina/messaging/execution-service/irsa_role_arn --query Parameter.Value --output text)
+          cd k8s/overlays/prod
+          sed -i "s#IRSA_ROLE_ARN#$IRSA_ROLE_ARN#" serviceaccount-irsa.yaml
+          kustomize edit set image oficina-execution="$ECR_URL:${GITHUB_SHA}"
+          kustomize build . | kubectl apply -f -
+
+      - name: Roda as migrations (Job)
+        env:
+          ECR_URL: ${{ steps.ecr.outputs.url }}
+        run: |
+          kubectl delete job oficina-execution-migrate -n "$NAMESPACE" --ignore-not-found
+          sed "s#image: oficina-execution:latest#image: $ECR_URL:${GITHUB_SHA}#" k8s/jobs/migrate-job.yaml \
+            | kubectl apply -n "$NAMESPACE" -f -
+          kubectl wait --for=condition=complete job/oficina-execution-migrate -n "$NAMESPACE" --timeout=180s
+
+      - name: Aguarda rollout
+        run: |
+          kubectl rollout status deploy/oficina-execution -n "$NAMESPACE" --timeout=240s
+          kubectl rollout status deploy/oficina-execution-worker -n "$NAMESPACE" --timeout=180s
+
+      - name: Status final
+        if: always()
+        run: |
+          kubectl get pods -n "$NAMESPACE" -l 'app in (oficina-execution,oficina-execution-worker)' -o wide || true
+          kubectl get ingress oficina-execution -n "$NAMESPACE" || true

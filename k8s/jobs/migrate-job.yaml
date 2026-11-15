@@ -1,0 +1,23 @@
+# Migrations do banco `execution`. Aplicado pela pipeline (delete + apply),
+# fora do kustomize, para evitar conflito com campos imutáveis de Job concluído.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oficina-execution-migrate
+  labels:
+    app.kubernetes.io/part-of: oficina
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: oficina-execution:latest
+          command: ["php", "artisan", "migrate", "--force"]
+          envFrom:
+            - configMapRef:
+                name: oficina-execution-config
+            - secretRef:
+                name: oficina-execution-secrets

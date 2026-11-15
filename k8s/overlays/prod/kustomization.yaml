@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# O namespace "oficina" é compartilhado e criado pela pipeline (e pelo OS Service).
+namespace: oficina
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+patches:
+  - path: serviceaccount-irsa.yaml
+
+# A pipeline substitui a imagem: kustomize edit set image oficina-execution=<ECR>:<sha>
+images:
+  - name: oficina-execution
+    newName: oficina-execution
+    newTag: latest

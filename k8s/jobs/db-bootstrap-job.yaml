@@ -1,0 +1,47 @@
+# Cria (ou atualiza) o usuário e o database próprios do Execution Service na
+# instância RDS compartilhada. O RDS fica em subnet privada, então isso roda
+# dentro do cluster, com as credenciais master num Secret temporário que a
+# pipeline cria antes e apaga depois. Idempotente.
+#
+# Isolamento: o execution_svc só conecta no database `execution`, e o
+# CONNECT público dos dois databases é revogado (cada serviço usa o seu).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oficina-execution-db-bootstrap
+  labels:
+    app.kubernetes.io/part-of: oficina
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: postgres:16-alpine
+          envFrom:
+            - secretRef:
+                name: oficina-execution-db-bootstrap
+          env:
+            - name: PGSSLMODE
+              value: require
+          command:
+            - sh
+            - -ec
+            - |
+              export PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGUSER="$MASTER_USER" PGPASSWORD="$MASTER_PASSWORD"
+              psql -v ON_ERROR_STOP=1 -d postgres \
+                -v svc_user="$SVC_USER" -v svc_password="$SVC_PASSWORD" -v svc_db="$SVC_DB" \
+                -v master_user="$MASTER_USER" -v os_db="$OS_DB" <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'svc_user', :'svc_password')
+               WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'svc_user') \gexec
+              SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'svc_user', :'svc_password') \gexec
+              -- No RDS o master precisa ser membro do role para criar o database com ele como dono.
+              SELECT format('GRANT %I TO %I', :'svc_user', :'master_user') \gexec
+              SELECT format('CREATE DATABASE %I OWNER %I', :'svc_db', :'svc_user')
+               WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'svc_db') \gexec
+              SELECT format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', :'svc_db') \gexec
+              SELECT format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', :'os_db') \gexec
+              SQL
+              echo "database $SVC_DB pronto para $SVC_USER"

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: oficina-execution
+  labels:
+    app: oficina-execution
+spec:
+  type: ClusterIP
+  selector:
+    app: oficina-execution
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

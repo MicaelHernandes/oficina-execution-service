@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oficina-execution-config
+data:
+  APP_NAME: "Oficina Execution"
+  APP_ENV: "production"
+  APP_DEBUG: "false"
+  APP_URL: "https://app.codefive.com.br"
+  L5_SWAGGER_CONST_HOST: "https://app.codefive.com.br"
+  LOG_CHANNEL: "json"
+  LOG_STACK: "json"
+  LOG_LEVEL: "info"
+  DB_CONNECTION: "pgsql"
+  # Conexão com TLS ao RDS.
+  DB_SSLMODE: "require"
+  CACHE_STORE: "file"
+  SESSION_DRIVER: "array"
+  QUEUE_CONNECTION: "sync"
+  METRICS_STORAGE: "apcu"
+  MESSAGING_SOURCE: "oficina-execution-service"
+  AWS_DEFAULT_REGION: "us-east-1"
