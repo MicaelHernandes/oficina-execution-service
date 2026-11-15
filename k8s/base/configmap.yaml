@@ -7,7 +7,6 @@ data:
   APP_ENV: "production"
   APP_DEBUG: "false"
   APP_URL: "https://app.codefive.com.br"
-  L5_SWAGGER_CONST_HOST: "https://app.codefive.com.br"
   LOG_CHANNEL: "json"
   LOG_STACK: "json"
   LOG_LEVEL: "info"

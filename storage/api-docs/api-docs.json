@@ -1,0 +1,370 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Oficina — Execution Service",
+        "description": "Fila de execução das OS: diagnóstico, reparo e finalização. Os comandos da saga chegam pela fila SQS; estas rotas são usadas pelo mecânico.",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "/",
+            "description": "Servidor principal"
+        }
+    ],
+    "paths": {
+        "/execution/api/jobs": {
+            "get": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Fila de execução: maior prioridade e mais antigas primeiro. Sem filtro, só as ativas (na fila, em diagnóstico, em reparo).",
+                "operationId": "f27b3758d6d45eba7912130ce441f5eb",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "queued",
+                                "diagnosing",
+                                "repairing",
+                                "finished",
+                                "failed",
+                                "cancelled"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 15
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Lista paginada"
+                    },
+                    "401": {
+                        "description": "Token inválido"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        },
+        "/execution/api/jobs/{id}": {
+            "get": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Execução com a linha do tempo (diagnóstico, reparo, anotações)",
+                "operationId": "06bff51c7df54d5eaef7418593e5b591",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Execução"
+                    },
+                    "404": {
+                        "description": "Não encontrada"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        },
+        "/execution/api/jobs/{id}/start-diagnosis": {
+            "post": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Mecânico assume a OS: queued → diagnosing. Publica execution.job.started (OS vai para \"em execução\").",
+                "operationId": "a8efe30d537e759dd7959dd876adaf9b",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "mechanic_user_id": {
+                                        "type": "integer",
+                                        "nullable": true
+                                    },
+                                    "note": {
+                                        "type": "string",
+                                        "nullable": true
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Em diagnóstico"
+                    },
+                    "404": {
+                        "description": "Não encontrada"
+                    },
+                    "422": {
+                        "description": "Transição inválida"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        },
+        "/execution/api/jobs/{id}/start-repair": {
+            "post": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Diagnóstico concluído: diagnosing → repairing",
+                "operationId": "d97c3d4745fafdc3d64c695ec821c048",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "note": {
+                                        "type": "string",
+                                        "nullable": true
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Em reparo"
+                    },
+                    "404": {
+                        "description": "Não encontrada"
+                    },
+                    "422": {
+                        "description": "Transição inválida"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        },
+        "/execution/api/jobs/{id}/notes": {
+            "post": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Anotação na linha do tempo, sem mudar de etapa",
+                "operationId": "dd4787fad5f3d48edb8f843c8c4060a4",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "note"
+                                ],
+                                "properties": {
+                                    "note": {
+                                        "type": "string"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Anotação registrada"
+                    },
+                    "404": {
+                        "description": "Não encontrada"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        },
+        "/execution/api/jobs/{id}/finish": {
+            "post": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Reparo concluído: repairing → finished. Publica execution.job.finished (OS em \"execução finalizada\").",
+                "operationId": "0174dd3d997bde7fcfae9cd2ad918326",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "note": {
+                                        "type": "string",
+                                        "nullable": true
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Finalizada"
+                    },
+                    "404": {
+                        "description": "Não encontrada"
+                    },
+                    "422": {
+                        "description": "Transição inválida"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        },
+        "/execution/api/jobs/{id}/fail": {
+            "post": {
+                "tags": [
+                    "Execução"
+                ],
+                "summary": "Execução não pôde ser concluída. Publica execution.job.failed: a saga devolve as peças, estorna o pagamento e cancela a OS.",
+                "operationId": "0158c3bd6fff975c235aceaf22a624f3",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "reason"
+                                ],
+                                "properties": {
+                                    "reason": {
+                                        "type": "string",
+                                        "example": "Elevador hidráulico quebrado"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Falhou"
+                    },
+                    "404": {
+                        "description": "Não encontrada"
+                    },
+                    "422": {
+                        "description": "Transição inválida"
+                    }
+                },
+                "security": [
+                    {
+                        "staffToken": []
+                    }
+                ]
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "staffToken": {
+                "type": "http",
+                "description": "EXECUTION_API_TOKEN",
+                "scheme": "bearer"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Execução",
+            "description": "Fila de execução e ações do mecânico (Bearer EXECUTION_API_TOKEN)"
+        }
+    ]
+}
